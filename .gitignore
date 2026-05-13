@@ -1,0 +1,10 @@
+# Dependency directory (redundant for version control)
+node_modules/
+
+# Local environment variables (High Security Risk)
+.env
+.env.local
+
+# Logs and system files
+npm-debug.log*
+.DS_Store
