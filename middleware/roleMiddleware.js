@@ -1,12 +1,16 @@
-const authorizeRole = (allowedRole) => {
+const authorizeRole = (...allowedRoles) => {
+    const allowed = allowedRoles.flat();
+
     return (req, res, next) => {
-        if (!req.farmer) {
+        if (!req.user && !req.farmer) {
             return res.status(401).json({
                 error: "Access denied. Authentication required."
             });
         }
 
-        if (req.farmer.role !== allowedRole) {
+        const role = req.user?.role || req.farmer?.role;
+
+        if (!allowed.includes(role)) {
             return res.status(403).json({
                 error: "Access denied. Insufficient permissions."
             });

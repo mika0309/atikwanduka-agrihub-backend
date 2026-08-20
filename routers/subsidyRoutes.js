@@ -15,7 +15,15 @@ router.post(
 router.get(
     "/my-vouchers",
     authenticateToken,
+    authorizeRole("farmer"),
     subsidyController.getMyVouchers
+);
+
+router.post(
+    "/redeem",
+    authenticateToken,
+    authorizeRole("farmer"),
+    subsidyController.redeemVoucher
 );
 
 module.exports = router;

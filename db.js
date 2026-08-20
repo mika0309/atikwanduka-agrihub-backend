@@ -1,12 +1,12 @@
-require('dotenv').config();
-const { Pool} = require("pg");
+const config = require("./config/env");
+const { Pool } = require("pg");
 
 const pool = new Pool({
-    user: process.env.DB_USER,
-    host: process.env.DB_HOST,
-    database: process.env.DB_NAME,
-    password: process.env.DB_PASSWORD,
-    port: process.env.DB_PORT,
+    user: config.database.user,
+    host: config.database.host,
+    database: config.database.database,
+    password: config.database.password,
+    port: config.database.port,
 });
 pool.query("SELECT 1")
     .then(() => console.log("Database connected"))

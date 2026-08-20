@@ -1,4 +1,5 @@
 const pool = require("../db");
+const { toPositiveNumber, trimString } = require("../utils/validation");
 
 exports.addProductionRecord = async (req, res) => {
     try {
@@ -11,9 +12,20 @@ exports.addProductionRecord = async (req, res) => {
             estimated_value
         } = req.body;
 
-        if (!crop_name || !quantity_harvested) {
+        const quantityHarvested = toPositiveNumber(quantity_harvested);
+        const estimatedValue = estimated_value === undefined || estimated_value === null || estimated_value === ""
+            ? null
+            : toPositiveNumber(estimated_value);
+
+        if (!trimString(crop_name) || !quantityHarvested) {
             return res.status(400).json({
-                error: "Crop name and quantity are required"
+                error: "Crop name and a positive quantity are required"
+            });
+        }
+
+        if (estimated_value !== undefined && estimated_value !== null && estimated_value !== "" && !estimatedValue) {
+            return res.status(400).json({
+                error: "Estimated value must be greater than zero"
             });
         }
 
@@ -24,10 +36,10 @@ exports.addProductionRecord = async (req, res) => {
              RETURNING *`,
             [
                 farmerId,
-                crop_name,
-                season,
-                quantity_harvested,
-                estimated_value
+                trimString(crop_name),
+                trimString(season),
+                quantityHarvested,
+                estimatedValue
             ]
         );
 

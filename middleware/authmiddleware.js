@@ -1,12 +1,18 @@
 const jwt = require("jsonwebtoken");
+const config = require("../config/env");
 
+/**
+ * Authentication Middleware
+ * 
+ * Validates JWT token from Authorization header.
+ * Expects unified JWT format: { userId, email, phone, role }
+ * 
+ * Sets req.user with consistent structure:
+ * { userId, email, phone, role }
+ */
 const authenticateToken = (req, res, next) => {
     try {
-        // 1. Read Authorization header
         const authHeader = req.headers["authorization"];
-
-        // Expected format:
-        // Bearer eyJhbGciOiJIUzI1Ni...
 
         if (!authHeader) {
             return res.status(401).json({
@@ -14,8 +20,9 @@ const authenticateToken = (req, res, next) => {
             });
         }
 
-        // 2. Extract token from "Bearer <token>"
-        const [scheme, token] = authHeader.split(" ");
+        const parts = authHeader.split(" ");
+        const scheme = parts[0];
+        const token = parts[1];
 
         if (scheme !== "Bearer" || !token) {
             return res.status(401).json({
@@ -23,18 +30,27 @@ const authenticateToken = (req, res, next) => {
             });
         }
 
-        // 3. Verify token
-        const decoded = jwt.verify(
-            token,
-            process.env.JWT_SECRET || "development_secret"
-        );
+        const decoded = jwt.verify(token, config.getJwtSecret());
 
-        // 4. Attach farmer identity to request
-        req.farmer = decoded;
+        // Normalize to consistent user object
+        // Handle both legacy and new JWT formats
+        req.user = {
+            userId: decoded.userId || decoded.farmer_id || decoded.admin_id || null,
+            email: decoded.email || null,
+            phone: decoded.phone || null,
+            role: decoded.role || "farmer",
+            profileId: decoded.profileId || null
+        };
 
-        // 5. Continue to next step
+        // Backward compatibility for existing controllers that use req.farmer
+        if (req.user.role === "farmer") {
+            req.farmer = {
+                farmer_id: req.user.profileId || req.user.userId,
+                ...req.user
+            };
+        }
+
         next();
-
     } catch (err) {
         return res.status(403).json({
             error: "Invalid or expired token."

@@ -1,6 +1,7 @@
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
 const pool = require("../db");
+const config = require("../config/env");
 
 const emptyToNull = (value) => {
     if (value === "" || value === undefined) {
@@ -11,15 +12,7 @@ const emptyToNull = (value) => {
 };
 
 const firstValue = (...values) => {
-    for (const value of values) {
-        const normalizedValue = emptyToNull(value);
-
-        if (normalizedValue !== null) {
-            return normalizedValue;
-        }
-    }
-
-    return null;
+    return values.find((value) => emptyToNull(value) !== null) || null;
 };
 
 exports.registerFarmer = async (req, res) => {
@@ -33,9 +26,8 @@ exports.registerFarmer = async (req, res) => {
         const district = firstValue(body.district);
         const farmSize = firstValue(body.farm_size, body.farmSize);
         const mainCrop = firstValue(body.main_crop, body.mainCrop);
-        const password = firstValue(body.password);
+        const password = firstValue(body.password, body.password_hash);
 
-        // Basic validation
         const missingFields = [];
         if (!fullName) missingFields.push("full_name");
         if (!phone) missingFields.push("phone");
@@ -51,14 +43,17 @@ exports.registerFarmer = async (req, res) => {
             });
         }
 
-        const hashedPassword = await bcrypt.hash(password, 10);
+        if (typeof password !== "string" || password.length < 8) {
+            return res.status(400).json({
+                error: "Password must be at least 8 characters"
+            });
+        }
 
+        const hashedPassword = await bcrypt.hash(password, 10);
         const newFarmer = await pool.query(
-            `INSERT INTO farmers 
-            (full_name, phone, national_id, region, district, ward, village, farm_size, main_crop, password)
-            
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-            
+            `INSERT INTO farmers
+            (full_name, phone, national_id, region, district, ward, village, farm_size, main_crop, password, role)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
             RETURNING *`,
             [
                 fullName,
@@ -70,13 +65,17 @@ exports.registerFarmer = async (req, res) => {
                 emptyToNull(body.village),
                 emptyToNull(farmSize),
                 emptyToNull(mainCrop),
-                hashedPassword
+                hashedPassword,
+                "farmer"
             ]
         );
 
+        const farmer = newFarmer.rows[0];
+        delete farmer.password;
+
         res.status(201).json({
             message: "Farmer registered successfully",
-            farmer: newFarmer.rows[0]
+            farmer
         });
 
     } catch (err) {
@@ -91,113 +90,97 @@ exports.registerFarmer = async (req, res) => {
         console.error(err.message);
 
         res.status(500).json({
-            error: "Server error",
-            details: err.message
+            error: "Server error"
         });
     }
 };
-
 exports.loginFarmer = async (req, res) => {
+
     try {
-        const body = req.body || {};
 
-        const phone = firstValue(body.phone, body.phone_number, body.phoneNumber);
-        const password = firstValue(body.password);
+        const { phone, password } = req.body;
 
-        const missingFields = [];
-        if (!phone) missingFields.push("phone");
-        if (!password) missingFields.push("password");
-
-        if (missingFields.length > 0) {
-            return res.status(400).json({
-                error: "Required fields are missing",
-                missingFields,
-                receivedFields: Object.keys(body)
-            });
-        }
-
-        const farmerResult = await pool.query(
-            `SELECT id, full_name, phone, region, district, role, password
-             FROM farmers
-             WHERE phone = $1`,
+        // Check farmer exists
+        const farmer = await pool.query(
+            "SELECT * FROM farmers WHERE phone = $1",
             [phone]
         );
 
-        if (farmerResult.rows.length === 0) {
+        if (farmer.rows.length === 0) {
             return res.status(401).json({
-                error: "Invalid phone or password"
+                error: "Invalid credentials"
             });
         }
 
-        const farmer = farmerResult.rows[0];
-        const passwordMatches = await bcrypt.compare(password, farmer.password);
-
-        if (!passwordMatches) {
-            return res.status(401).json({
-                error: "Invalid phone or password"
-            });
-        }
-
-        const token = jwt.sign(
-            {
-                farmer_id: farmer.id,
-                phone: farmer.phone,
-                role: farmer.role
-            },
-            process.env.JWT_SECRET || "development_secret",
-            { expiresIn: "1d" }
+        const validPassword = await bcrypt.compare(
+            password,
+            farmer.rows[0].password
         );
 
-        delete farmer.password;
+        if (!validPassword) {
+            return res.status(401).json({
+                error: "Invalid credentials"
+            });
+        }
 
-        res.status(200).json({
-            message: "Farmer logged in successfully",
+        const userRecord = farmer.rows[0];
+        const token = jwt.sign(
+            {
+                farmer_id: userRecord.id,
+                role: userRecord.role || "farmer",
+                subject: "farmer"
+            },
+            config.getJwtSecret(),
+            {
+                expiresIn: "1d"
+            }
+        );
+
+        res.json({
+            message: "Login successful",
             token,
-            farmer
+            farmer: {
+                id: userRecord.id,
+                full_name: userRecord.full_name,
+                phone: userRecord.phone,
+                region: userRecord.region,
+                district: userRecord.district,
+                role: userRecord.role || "farmer"
+            }
         });
+
     } catch (err) {
+
         console.error(err.message);
 
         res.status(500).json({
-            error: "Server error",
-            details: err.message
+            error: "Server error"
         });
     }
 };
-
 exports.getMyProfile = async (req, res) => {
     try {
-        const farmerId = req.farmer && req.farmer.farmer_id;
+        // Use farmer profile ID first (for unified auth: profileId = farmers.id)
+        // Fall back to req.user.userId (which may be users.id — handle carefully)
+        const farmerId = (req.farmer && req.farmer.farmer_id) || (req.user && req.user.userId);
 
         if (!farmerId) {
-            return res.status(401).json({
-                error: "Invalid token payload"
-            });
+            return res.status(401).json({ error: "Unauthorized" });
         }
 
-        const farmerResult = await pool.query(
-            `SELECT id, full_name, phone, national_id, region, district, ward, village,
-                    farm_size, main_crop, created_at
-             FROM farmers
-             WHERE id = $1`,
+        const result = await pool.query(
+            `SELECT id, full_name, phone, national_id, region, district, ward, village, farm_size, main_crop, role
+             FROM farmers WHERE id = $1`,
             [farmerId]
         );
 
-        if (farmerResult.rows.length === 0) {
-            return res.status(404).json({
-                error: "Farmer not found"
-            });
+        if (result.rows.length === 0) {
+            return res.status(404).json({ error: "Farmer not found" });
         }
 
-        res.status(200).json({
-            farmer: farmerResult.rows[0]
-        });
+        res.json({ farmer: result.rows[0] });
     } catch (err) {
         console.error(err.message);
-
-        res.status(500).json({
-            error: "Server error",
-            details: err.message
-        });
+        res.status(500).json({ error: "Server error" });
     }
 };
